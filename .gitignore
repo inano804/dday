@@ -1,0 +1,6 @@
+.env
+.DS_Store
+__pycache__/
+krx_cache.json
+.vercel
+.env*

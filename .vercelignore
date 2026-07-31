@@ -1,0 +1,9 @@
+.env
+.git
+.DS_Store
+__pycache__/
+krx_cache.json
+docs/
+바꿀꺼.txt
+app.py
+README.md

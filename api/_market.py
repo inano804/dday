@@ -30,6 +30,14 @@ YAHOO_CHART_URLS = (
 USER_AGENT = "Mozilla/5.0"
 DISTRIBUTION_DROP_THRESHOLD_PCT = -0.2
 
+# IBD 카운팅 규칙 (docs/memory.md 기준)
+DISTRIBUTION_RECOVERY_PCT = 5.0   # 종가 대비 +5% 이상 상승 시 개별 분산일 소멸
+DISTRIBUTION_WINDOW_DAYS = 25     # 롤링 25거래일 창(이 밖은 기간 경과로 소멸)
+CLUSTER_WINDOW_DAYS = 15          # 단기 클러스터 판정 창(약 3주)
+CLUSTER_THRESHOLD = 4             # 창 내 유효 분산일이 이 개수 이상이면 경고
+PHASE_PRESSURE_MIN = 3            # 유효 분산일 3~4개: 상승추세 압박
+PHASE_CORRECTION_MIN = 5         # 유효 분산일 5개 이상: 조정 국면 경고
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 IS_SERVERLESS = bool(os.environ.get("VERCEL"))
 
@@ -471,6 +479,60 @@ def safe_pct(change: Optional[float], base: Optional[float]) -> Optional[float]:
     return (change / base) * 100
 
 
+def annotate_distribution_lifecycle(one_year_rows: List[Dict[str, Any]]) -> None:
+    """각 분산일에 소멸 여부(expired)와 유효 여부(active)를 표시한다(행을 직접 수정).
+
+    IBD 규칙: 분산일은 롤링 25거래일 창 안에서만 세고, 그 창 안이라도 지수가
+    해당 분산일 종가 대비 +5% 이상 상승하면 강세가 매도물량을 흡수했다고 보아 소멸시킨다.
+    """
+    n = len(one_year_rows)
+    window_start = n - DISTRIBUTION_WINDOW_DAYS  # 이 인덱스 미만은 기간 경과로 소멸
+
+    for i, row in enumerate(one_year_rows):
+        expired = False
+        reason: Optional[str] = None
+        active = False
+
+        if row.get("distribution"):
+            if i < window_start:
+                expired = True
+                reason = "25거래일 경과"
+            else:
+                threshold = row["close"] * (1 + DISTRIBUTION_RECOVERY_PCT / 100)
+                recovered = any(
+                    one_year_rows[j]["close"] >= threshold for j in range(i + 1, n)
+                )
+                if recovered:
+                    expired = True
+                    reason = "5% 회복"
+            active = not expired
+
+        row["expired"] = expired
+        row["expiredReason"] = reason
+        row["active"] = active
+
+
+def market_phase(active_count: int) -> Dict[str, Any]:
+    """유효 분산일 수로 IBD Market Pulse 3단계 국면을 판정한다."""
+    if active_count >= PHASE_CORRECTION_MIN:
+        return {
+            "level": "correction",
+            "label": "조정 국면 진입 경고",
+            "action": "현금 비중 확대, 신규 진입 중단",
+        }
+    if active_count >= PHASE_PRESSURE_MIN:
+        return {
+            "level": "pressure",
+            "label": "상승추세 압박",
+            "action": "신규 매수 축소, 손절 엄격 적용",
+        }
+    return {
+        "level": "confirmed",
+        "label": "확인된 상승추세",
+        "action": "정상 비중 운용",
+    }
+
+
 def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]:
     cached = _CACHE.get(index_id)
     now = time.time()
@@ -506,10 +568,18 @@ def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]
     if not one_year_rows:
         raise RuntimeError("최근 1년 데이터가 없습니다.")
 
-    recent25_rows = one_year_rows[-25:]
+    annotate_distribution_lifecycle(one_year_rows)
+
+    recent25_rows = one_year_rows[-DISTRIBUTION_WINDOW_DAYS:]
     recent25_distribution = [row for row in recent25_rows if row["distribution"]]
+    active_distribution = [row for row in one_year_rows if row["active"]]
+    active_count = len(active_distribution)
     one_year_distribution = [row for row in one_year_rows if row["distribution"]]
     latest = one_year_rows[-1]
+
+    cluster_slice = one_year_rows[-CLUSTER_WINDOW_DAYS:]
+    cluster_count = sum(1 for row in cluster_slice if row["active"])
+    cluster_warning = cluster_count >= CLUSTER_THRESHOLD
 
     payload = {
         "index": {
@@ -525,12 +595,21 @@ def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]
         "summary": {
             "recent25TradingDays": len(recent25_rows),
             "recent25DistributionCount": len(recent25_distribution),
+            "activeDistributionCount": active_count,
             "oneYearTradingDays": len(one_year_rows),
             "oneYearDistributionCount": len(one_year_distribution),
+        },
+        "phase": market_phase(active_count),
+        "cluster": {
+            "warning": cluster_warning,
+            "count": cluster_count,
+            "windowDays": CLUSTER_WINDOW_DAYS,
+            "threshold": CLUSTER_THRESHOLD,
         },
         "latest": latest,
         "series": one_year_rows,
         "recent25DistributionDays": recent25_distribution,
+        "activeDistributionDays": active_distribution,
         "oneYearDistributionDays": one_year_distribution,
     }
     _CACHE[index_id] = {"created_at": now, "payload": payload}

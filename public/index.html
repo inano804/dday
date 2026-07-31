@@ -138,6 +138,84 @@
       min-width: 140px;
     }
 
+    .phase-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-left: 6px solid var(--muted);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .phase-banner.confirmed {
+      border-left-color: var(--good);
+      background: #f2f9f5;
+    }
+
+    .phase-banner.pressure {
+      border-left-color: #b7791f;
+      background: #fdf7ec;
+    }
+
+    .phase-banner.correction {
+      border-left-color: var(--danger);
+      background: #fdf3f1;
+    }
+
+    .phase-main {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .phase-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: var(--muted);
+      flex: none;
+    }
+
+    .phase-banner.confirmed .phase-dot { background: var(--good); }
+    .phase-banner.pressure .phase-dot { background: #b7791f; }
+    .phase-banner.correction .phase-dot { background: var(--danger); }
+
+    .phase-label {
+      font-size: 19px;
+      font-weight: 780;
+    }
+
+    .phase-action {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+
+    .phase-side {
+      text-align: right;
+    }
+
+    .phase-count {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .phase-cluster {
+      margin-top: 4px;
+      font-size: 12.5px;
+      font-weight: 720;
+      color: var(--danger);
+    }
+
+    .phase-cluster:empty {
+      display: none;
+    }
+
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -382,9 +460,23 @@
 
     <div class="error" id="errorBox"></div>
 
+    <section class="phase-banner" id="phaseBanner" aria-label="시장 국면">
+      <div class="phase-main">
+        <span class="phase-dot" id="phaseDot" aria-hidden="true"></span>
+        <div>
+          <div class="phase-label" id="phaseLabel">-</div>
+          <div class="phase-action" id="phaseAction">-</div>
+        </div>
+      </div>
+      <div class="phase-side">
+        <div class="phase-count" id="phaseCount">-</div>
+        <div class="phase-cluster" id="phaseCluster"></div>
+      </div>
+    </section>
+
     <section class="summary-grid" aria-label="요약">
       <div class="metric">
-        <div class="metric-label">최근 25거래일 분산일</div>
+        <div class="metric-label">유효 분산일 (25거래일 창)</div>
         <div class="metric-value" id="recent25Count">-</div>
         <div class="metric-detail" id="recent25Detail">-</div>
       </div>
@@ -413,7 +505,8 @@
         <div class="legend" aria-label="범례">
           <span><i class="swatch" style="background: var(--price)"></i>종가</span>
           <span><i class="swatch" style="background: var(--volume)"></i>거래량</span>
-          <span><i class="swatch" style="background: var(--danger)"></i>분산일</span>
+          <span><i class="swatch" style="background: var(--danger)"></i>유효 분산일</span>
+          <span><i class="swatch" style="border: 1.5px solid #9aa7ae; background: transparent"></i>소멸 분산일</span>
         </div>
       </div>
       <div class="chart-wrap">
@@ -424,7 +517,7 @@
     <section class="tables" aria-label="분산일 목록">
       <div class="table-panel">
         <div class="table-title">
-          <span>최근 25거래일</span>
+          <span>유효 분산일 (25거래일 창)</span>
           <span class="table-count" id="recent25TableCount">-</span>
         </div>
         <div class="table-scroll">
@@ -475,6 +568,11 @@
       refreshButton: document.getElementById("refreshButton"),
       errorBox: document.getElementById("errorBox"),
       indexButtons: document.getElementById("indexButtons"),
+      phaseBanner: document.getElementById("phaseBanner"),
+      phaseLabel: document.getElementById("phaseLabel"),
+      phaseAction: document.getElementById("phaseAction"),
+      phaseCount: document.getElementById("phaseCount"),
+      phaseCluster: document.getElementById("phaseCluster"),
       recent25Count: document.getElementById("recent25Count"),
       recent25Detail: document.getElementById("recent25Detail"),
       oneYearCount: document.getElementById("oneYearCount"),
@@ -626,11 +724,23 @@
       const latest = payload.latest;
       const index = payload.index;
 
+      const phase = payload.phase || {};
+      const cluster = payload.cluster || {};
+      const activeCount = summary.activeDistributionCount ?? summary.recent25DistributionCount;
+
       elements.asOf.textContent = `${index.name} 기준일 ${payload.asOf}`;
-      elements.recent25Count.textContent = `${summary.recent25DistributionCount}일`;
-      elements.recent25Detail.textContent = `${summary.recent25TradingDays}거래일 중`;
+      elements.phaseBanner.className = `phase-banner ${phase.level || ""}`;
+      elements.phaseLabel.textContent = phase.label || "-";
+      elements.phaseAction.textContent = phase.action || "";
+      elements.phaseCount.textContent = `유효 분산일 ${activeCount}일`;
+      elements.phaseCluster.textContent = cluster.warning
+        ? `⚠ 최근 ${cluster.windowDays}거래일에 ${cluster.count}일 집중 — 조정 임박 신호`
+        : "";
+
+      elements.recent25Count.textContent = `${activeCount}일`;
+      elements.recent25Detail.textContent = `창 내 발생 ${summary.recent25DistributionCount}일 중 (5% 회복·기간경과 제외)`;
       elements.oneYearCount.textContent = `${summary.oneYearDistributionCount}일`;
-      elements.oneYearDetail.textContent = `${summary.oneYearTradingDays}거래일 중`;
+      elements.oneYearDetail.textContent = `${summary.oneYearTradingDays}거래일 중 (참고용)`;
       elements.latestClose.textContent = formatNumber(latest.close);
       elements.latestChange.textContent = formatPct(latest.closeChangePct);
       elements.latestChange.className = `metric-detail ${pctClass(latest.closeChangePct)}`;
@@ -638,12 +748,12 @@
       elements.latestVolumeChange.textContent = formatPct(latest.volumeChangePct);
       elements.latestVolumeChange.className = `metric-detail ${pctClass(latest.volumeChangePct)}`;
       elements.chartTitle.textContent = `${index.name} 최근 1년 지수와 거래량`;
-      elements.sourceNote.textContent = `출처: ${payload.source}. 분산일 기준: 전 거래일 대비 종가 0.2% 이상 하락 및 거래량 증가.`;
+      elements.sourceNote.textContent = `출처: ${payload.source}. 분산일 = 전 거래일 대비 종가 0.2%↓ + 거래량 증가. 유효 분산일 = 25거래일 창 내 미소멸(지수가 해당일 종가 대비 5%↑ 상승 시 소멸). 분산일은 후행 지표로, 확인 신호이지 예측 신호가 아닙니다.`;
 
       renderChart(payload);
-      renderRows(elements.recent25Rows, elements.recent25Empty, payload.recent25DistributionDays);
+      renderRows(elements.recent25Rows, elements.recent25Empty, payload.activeDistributionDays);
       renderRows(elements.oneYearRows, elements.oneYearEmpty, payload.oneYearDistributionDays);
-      elements.recent25TableCount.textContent = `${payload.recent25DistributionDays.length}일`;
+      elements.recent25TableCount.textContent = `${payload.activeDistributionDays.length}일`;
       elements.oneYearTableCount.textContent = `${payload.oneYearDistributionDays.length}일`;
     }
 
@@ -668,7 +778,8 @@
       const labels = payload.series.map((row) => row.date);
       const closeData = payload.series.map((row) => row.close);
       const volumeData = payload.series.map((row) => row.volume);
-      const distributionData = payload.series.map((row) => row.distribution ? row.close : null);
+      const activeData = payload.series.map((row) => row.active ? row.close : null);
+      const expiredData = payload.series.map((row) => (row.distribution && !row.active) ? row.close : null);
 
       const context = document.getElementById("marketChart").getContext("2d");
       if (chart) chart.destroy();
@@ -703,8 +814,21 @@
             },
             {
               type: "line",
-              label: "분산일",
-              data: distributionData,
+              label: "소멸 분산일",
+              data: expiredData,
+              yAxisID: "price",
+              showLine: false,
+              pointRadius: 3.5,
+              pointHoverRadius: 6,
+              pointBackgroundColor: "rgba(255,255,255,0)",
+              pointBorderColor: "#9aa7ae",
+              pointBorderWidth: 1.5,
+              order: 0,
+            },
+            {
+              type: "line",
+              label: "유효 분산일",
+              data: activeData,
               yAxisID: "price",
               showLine: false,
               pointRadius: 4.5,
@@ -736,7 +860,9 @@
                     `등락률: ${formatPct(row.closeChangePct)}`,
                     `거래량 증감: ${formatPct(row.volumeChangePct)}`,
                   ];
-                  if (row.distribution) lines.push("분산일");
+                  if (row.distribution) {
+                    lines.push(row.active ? "유효 분산일" : `소멸 분산일 (${row.expiredReason || "소멸"})`);
+                  }
                   return lines;
                 },
               },

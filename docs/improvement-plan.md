@@ -135,15 +135,15 @@ memory.md: "코스닥은 개인 비중 높아 신호 품질 낮음." 코스닥 �
 | `idx/kospi_dd_trd` | ✅ 구독 | KOSPI 계열 지수 일별시세 — **현재 사용 중** |
 | `idx/krx_dd_trd` | ✅ 구독 | KRX 계열 지수(코리아 밸류업 등) |
 | `sto/stk_bydd_trd` | ✅ 구독 | **코스피 전종목(943개) 일별 OHLCV·시총** — 시장 폭 계산 가능 |
-| `idx/kosdaq_dd_trd` | ❌ 401 | 코스닥 지수 — 미구독 |
-| `sto/ksq_bydd_trd` | ❌ 401 | 코스닥 전종목 — 미구독 |
+| `idx/kosdaq_dd_trd` | ✅ 구독 | 코스닥 지수 일별시세 — **KOSPI와 함께 KRX 공식 소스 적용 완료** |
+| `sto/ksq_bydd_trd` | ✅ 구독 | 코스닥 전종목(1821개) — 시장 폭 계산 가능 |
 
 **핵심 결론:**
 
 1. **KOSPI 지수 데이터는 이미 최상위 신뢰도** — 거래소 공식 소스를 쓰고 있어 추가 개선 여지 없음. (당일 데이터 없음은 일별 API의 구조적 한계 T+1.)
 2. **외국인·기관 수급 / 프로그램 매매 API는 이 OpenAPI에 없음** — 투자자별 거래실적은 웹 마켓플레이스(data.krx.co.kr, MDCSTAT022)에만 있고 OpenAPI 미제공. memory.md의 수급 교차확인(구 Tier 4)은 이 경로로는 불가.
 3. **대신 시장 폭(breadth)이 확보 가능** — `sto/stk_bydd_trd`로 코스피 전종목의 등락 종목수·상승/하락 거래량을 계산할 수 있다. 이는 수급 데이터보다 오닐/IBD 방법론에 더 직접적으로 부합하는 신호 품질 보강책이다(아래 Tier 2.5).
-4. **코스닥은 미구독** — 계속 Yahoo 사용. KRX OpenAPI 포털에서 `idx/kosdaq_dd_trd` 무료 신청 시 코스닥도 공식 소스로 승격 가능(사용자 액션 필요).
+4. **코스닥도 KRX 공식 소스 적용 완료** — `idx/kosdaq_dd_trd` 구독 처리 후 KOSPI와 동일하게 KRX 일별시세를 사용한다(인증키 미구독/오류 시 Yahoo로 자동 폴백). 이제 KOSPI·KOSDAQ 모두 거래소 공식 종가·거래량 기반. 코스닥 전종목(`sto/ksq_bydd_trd`, 1821개)도 열려 시장 폭 계산 가능.
 
 ## Tier 2.5 — 시장 폭(Market Breadth) 지표 (신규, 우선순위 상, 난이도 중)
 

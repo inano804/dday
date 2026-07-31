@@ -61,13 +61,31 @@ def load_env_file(path: Path) -> None:
 
 load_env_file(BASE_DIR / ".env")
 
-KRX_KOSPI_DAILY_URL = "https://data-dbg.krx.co.kr/svc/apis/idx/kospi_dd_trd"
-KRX_INDEX_NAME = "코스피"
-KRX_SOURCE_NAME = "KRX 정보데이터시스템 오픈API (KOSPI 일별시세)"
-KRX_SNAPSHOT_PATH = Path(__file__).resolve().parent / "_krx_snapshot.json"
-KRX_RUNTIME_CACHE_PATH = (
-    Path("/tmp/krx_cache.json") if IS_SERVERLESS else BASE_DIR / "krx_cache.json"
-)
+# KRX 오픈API 일별시세를 공식 소스로 쓰는 지수들(그 외는 Yahoo). 인증키 미구독 시 자동 폴백.
+KRX_INDEX_CONFIG: Dict[str, Dict[str, str]] = {
+    "kospi": {
+        "url": "https://data-dbg.krx.co.kr/svc/apis/idx/kospi_dd_trd",
+        "idxName": "코스피",
+        "source": "KRX 정보데이터시스템 오픈API (KOSPI 일별시세)",
+    },
+    "kosdaq": {
+        "url": "https://data-dbg.krx.co.kr/svc/apis/idx/kosdaq_dd_trd",
+        "idxName": "코스닥",
+        "source": "KRX 정보데이터시스템 오픈API (KOSDAQ 일별시세)",
+    },
+}
+_API_DIR = Path(__file__).resolve().parent
+
+
+def krx_snapshot_path(index_id: str) -> Path:
+    return _API_DIR / f"_krx_snapshot_{index_id}.json"
+
+
+def krx_runtime_cache_path(index_id: str) -> Path:
+    name = f"krx_cache_{index_id}.json"
+    return Path("/tmp") / name if IS_SERVERLESS else BASE_DIR / name
+
+
 KRX_HISTORY_DAYS = 396
 # 빈 응답(휴장 또는 미공표)은 기준일로부터 이 일수가 지난 뒤 확인됐을 때만 휴장으로 확정한다.
 KRX_EMPTY_RECHECK_DAYS = 5
@@ -113,8 +131,18 @@ INDEXES: Dict[str, Dict[str, str]] = {
 
 _CACHE: Dict[str, Dict[str, Any]] = {}
 _KRX_CACHE_LOCK = threading.Lock()
-_KRX_BUILD_LOCK = threading.Lock()
-_KRX_DISK_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+_KRX_BUILD_LOCKS: Dict[str, threading.Lock] = {}
+_KRX_DISK_CACHE: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+
+def krx_build_lock(index_id: str) -> threading.Lock:
+    """지수별 빌드 락(코스피 403 백오프가 코스닥 요청을 막지 않도록 분리)."""
+    with _KRX_CACHE_LOCK:
+        lock = _KRX_BUILD_LOCKS.get(index_id)
+        if lock is None:
+            lock = threading.Lock()
+            _KRX_BUILD_LOCKS[index_id] = lock
+        return lock
 
 
 def index_payloads() -> List[Dict[str, str]]:
@@ -234,9 +262,11 @@ def parse_krx_number(value: Any) -> Optional[float]:
         return None
 
 
-def request_krx_daily(bas_dd: str) -> Optional[Dict[str, Any]]:
-    """기준일 하루치를 조회해 코스피 지수 행을 돌려준다. 휴장/미공표면 None."""
-    url = f"{KRX_KOSPI_DAILY_URL}?basDd={bas_dd}"
+def request_krx_daily(index_id: str, bas_dd: str) -> Optional[Dict[str, Any]]:
+    """기준일 하루치를 조회해 해당 지수 행을 돌려준다. 휴장/미공표면 None."""
+    config = KRX_INDEX_CONFIG[index_id]
+    url = f"{config['url']}?basDd={bas_dd}"
+    idx_name = config["idxName"]
     last_error = "알 수 없는 오류"
 
     for attempt in range(KRX_RETRY_ATTEMPTS):
@@ -254,7 +284,7 @@ def request_krx_daily(bas_dd: str) -> Optional[Dict[str, Any]]:
             continue
 
         for item in raw["OutBlock_1"]:
-            if str(item.get("IDX_NM", "")).strip() != KRX_INDEX_NAME:
+            if str(item.get("IDX_NM", "")).strip() != idx_name:
                 continue
             close = parse_krx_number(item.get("CLSPRC_IDX"))
             volume = parse_krx_number(item.get("ACC_TRDVOL"))
@@ -284,24 +314,26 @@ def read_krx_cache_file(path: Path) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def load_krx_cache() -> Dict[str, Dict[str, Any]]:
+def load_krx_cache(index_id: str) -> Dict[str, Dict[str, Any]]:
     """배포에 번들된 스냅샷 위에 런타임 캐시를 덮어서 합친다(런타임이 더 최신)."""
-    global _KRX_DISK_CACHE
-    if _KRX_DISK_CACHE is None:
-        snapshot = read_krx_cache_file(KRX_SNAPSHOT_PATH)
-        runtime = read_krx_cache_file(KRX_RUNTIME_CACHE_PATH)
-        _KRX_DISK_CACHE = {
+    cache = _KRX_DISK_CACHE.get(index_id)
+    if cache is None:
+        snapshot = read_krx_cache_file(krx_snapshot_path(index_id))
+        runtime = read_krx_cache_file(krx_runtime_cache_path(index_id))
+        cache = {
             "rows": {**snapshot["rows"], **runtime["rows"]},
             "empty": {**snapshot["empty"], **runtime["empty"]},
         }
-    return _KRX_DISK_CACHE
+        _KRX_DISK_CACHE[index_id] = cache
+    return cache
 
 
-def save_krx_cache(cache: Dict[str, Dict[str, Any]]) -> None:
+def save_krx_cache(index_id: str, cache: Dict[str, Dict[str, Any]]) -> None:
+    path = krx_runtime_cache_path(index_id)
     try:
-        tmp_path = KRX_RUNTIME_CACHE_PATH.with_suffix(".json.tmp")
+        tmp_path = path.with_suffix(".json.tmp")
         tmp_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-        tmp_path.replace(KRX_RUNTIME_CACHE_PATH)
+        tmp_path.replace(path)
     except OSError as exc:
         sys.stderr.write(f"KRX 캐시 저장 실패(무시하고 진행): {exc}\n")
 
@@ -312,13 +344,14 @@ def seoul_today() -> date:
     return datetime.now().date()
 
 
-def build_krx_kospi_rows() -> List[Dict[str, Any]]:
-    with _KRX_BUILD_LOCK:
+def build_krx_rows(index_id: str) -> List[Dict[str, Any]]:
+    label = KRX_INDEX_CONFIG[index_id]["idxName"]
+    with krx_build_lock(index_id):
         today = seoul_today()
         start = today - timedelta(days=KRX_HISTORY_DAYS)
 
         with _KRX_CACHE_LOCK:
-            cache = load_krx_cache()
+            cache = load_krx_cache(index_id)
             pending: List[str] = []
             current = start
             while current <= today:
@@ -342,7 +375,7 @@ def build_krx_kospi_rows() -> List[Dict[str, Any]]:
 
         if len(pending) > 5:
             sys.stderr.write(
-                f"KRX 일별시세 {len(pending)}건 수집 시작(1초 간격, 약 {len(pending)}초 예상)\n"
+                f"KRX {label} 일별시세 {len(pending)}건 수집 시작(1초 간격, 약 {len(pending)}초 예상)\n"
             )
 
         fetched: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -351,15 +384,15 @@ def build_krx_kospi_rows() -> List[Dict[str, Any]]:
             if position:
                 time.sleep(KRX_REQUEST_INTERVAL_SECONDS)
             try:
-                fetched[bas_dd] = request_krx_daily(bas_dd)
+                fetched[bas_dd] = request_krx_daily(index_id, bas_dd)
             except RuntimeError as exc:
                 error = f"{bas_dd}: {exc}"
                 break
             if position and position % 50 == 0:
-                sys.stderr.write(f"KRX 수집 진행 {position}/{len(pending)}\n")
+                sys.stderr.write(f"KRX {label} 수집 진행 {position}/{len(pending)}\n")
 
         with _KRX_CACHE_LOCK:
-            cache = load_krx_cache()
+            cache = load_krx_cache(index_id)
             today_iso = today.isoformat()
             for bas_dd, row in fetched.items():
                 if row is None:
@@ -368,7 +401,7 @@ def build_krx_kospi_rows() -> List[Dict[str, Any]]:
                     cache["rows"][bas_dd] = row
                     cache["empty"].pop(bas_dd, None)
             if fetched:
-                save_krx_cache(cache)
+                save_krx_cache(index_id, cache)
             if error:
                 raise RuntimeError(
                     f"KRX 일별시세 조회 실패({error}), 이후 날짜는 다음 새로고침에 이어서 수집"
@@ -543,13 +576,13 @@ def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]
     rows: Optional[List[Dict[str, Any]]] = None
     source = "Yahoo Finance chart API"
 
-    if index_id == "kospi" and krx_auth_key():
+    if index_id in KRX_INDEX_CONFIG and krx_auth_key():
         try:
-            krx_rows = build_krx_kospi_rows()
+            krx_rows = build_krx_rows(index_id)
             if len(krx_rows) < 2:
                 raise RuntimeError("KRX 데이터가 충분하지 않습니다.")
             rows = enrich_rows(krx_rows)
-            source = KRX_SOURCE_NAME
+            source = KRX_INDEX_CONFIG[index_id]["source"]
         except RuntimeError as exc:
             sys.stderr.write(f"KRX 수집 실패, Yahoo Finance로 대체합니다: {exc}\n")
             source = "Yahoo Finance chart API (KRX 오류로 대체)"

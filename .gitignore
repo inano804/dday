@@ -1,6 +1,6 @@
 .env
 .DS_Store
 __pycache__/
-krx_cache.json
+krx_cache_*.json
 .vercel
 .env*

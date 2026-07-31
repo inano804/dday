@@ -475,6 +475,102 @@
       font-size: 12px;
     }
 
+    .glossary {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .glossary > summary {
+      padding: 14px 16px;
+      font-weight: 720;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+    }
+
+    .glossary > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .glossary > summary::before {
+      content: "▸";
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .glossary[open] > summary::before {
+      content: "▾";
+    }
+
+    .glossary[open] > summary {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .glossary-body {
+      padding: 8px 20px 18px;
+    }
+
+    .glossary-intro {
+      color: var(--muted);
+      font-size: 13.5px;
+      margin: 10px 0 16px;
+    }
+
+    .glossary dl {
+      margin: 0;
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) 1fr;
+      gap: 10px 24px;
+    }
+
+    .glossary dt {
+      font-weight: 740;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .glossary dd {
+      margin: 0;
+      color: #38454d;
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+
+    .g-badge {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .g-badge.dist { background: #fbe6e2; color: #a3271c; }
+    .g-badge.stalling { background: #fbe7d2; color: #955b12; }
+    .g-badge.accum { background: #e0f0e8; color: #1c6647; }
+    .g-badge.witch { background: #e6e9ec; color: #5c6a72; }
+    .g-badge.ftd { background: #e0f0e8; color: #24795a; }
+
+    .g-good { color: var(--good); }
+    .g-warn { color: #b7791f; }
+    .g-bad { color: var(--danger); }
+
+    @media (max-width: 720px) {
+      .glossary dl {
+        grid-template-columns: 1fr;
+        gap: 4px 0;
+      }
+      .glossary dt {
+        margin-top: 12px;
+      }
+    }
+
     @media (max-width: 980px) {
       .summary-grid,
       .tables {
@@ -656,6 +752,47 @@
         </div>
       </div>
     </section>
+
+    <details class="glossary" id="glossary">
+      <summary>용어 설명 — 이 대시보드의 신호가 무슨 뜻인가요?</summary>
+      <div class="glossary-body">
+        <p class="glossary-intro">
+          윌리엄 오닐(William O'Neil)·IBD가 체계화한 개념으로, <b>지수 거래량으로 기관의 매도/매수 압력을 읽어 시장 국면을 판단</b>합니다.
+          아래 신호는 예측이 아니라 <b>이미 일어난 일을 확인</b>하는 후행 지표입니다.
+        </p>
+        <dl>
+          <dt>분산일 <span class="g-badge dist">분산</span></dt>
+          <dd>전 거래일보다 종가가 <b>0.2% 이상 하락</b>했는데 <b>거래량은 늘어난</b> 날. 기관이 물량을 시장에 푸는(분산하는) 것으로 봅니다.</dd>
+
+          <dt>정체일 <span class="g-badge stalling">정체</span></dt>
+          <dd>상승 마감이라도 <b>상승폭이 미미</b>하고 <b>거래량이 늘면서 종가가 일중 저가권</b>에 형성된 날. 매수세가 매도벽에 막힌 것으로 보아 분산일과 똑같이 압력으로 셉니다.</dd>
+
+          <dt>압박일 (분산일 + 정체일)</dt>
+          <dd>지수에 매도 압력이 가해진 날의 총칭. 분산일과 정체일을 합쳐 부릅니다.</dd>
+
+          <dt>유효 / 소멸 압박일</dt>
+          <dd><b>유효</b> = 아직 유효하게 카운트되는 압박일. <b>소멸</b> = ①발생 후 25거래일이 지났거나 ②지수가 그날 종가보다 <b>5% 이상 상승</b>해 강세가 매도물량을 흡수했다고 보아 제외된 압박일. 차트에서 회색 테두리로 표시됩니다.</dd>
+
+          <dt>매집일 <span class="g-badge accum">매집</span></dt>
+          <dd>거래량 증가를 동반한 <b>상승일</b>. 분산일의 반대 개념으로, 기관이 사 모으는(매집하는) 날입니다.</dd>
+
+          <dt>순압력</dt>
+          <dd>최근 25거래일의 <b>유효 압박일 수 − 매집일 수</b>. 값이 클수록 매도 압력 우위, <b>음수일수록 강세</b>입니다.</dd>
+
+          <dt>FTD (Follow-Through Day, 팔로스루 데이) <span class="g-badge ftd">▲</span></dt>
+          <dd>조정 국면에서 저점을 찍은 뒤 <b>4거래일째 이상</b>에, <b>거래량 증가와 함께 1.25% 이상 상승</b>한 날. 새 상승추세로의 전환을 알리는 <b>재진입 신호</b>로, 분산일과 짝을 이룹니다.</dd>
+
+          <dt>시장 국면 (배너 색)</dt>
+          <dd>유효 압박일 수로 판단합니다. <b class="g-good">0~2 확인된 상승추세</b> · <b class="g-warn">3~4 상승추세 압박</b> · <b class="g-bad">5+ 조정 국면 경고</b>.</dd>
+
+          <dt>시장 폭 (Market Breadth)</dt>
+          <dd>지수 한 줄이 아니라 <b>전종목의 등락 종목수·상승/하락 거래량비</b>. 지수는 소폭이라도 하락 종목·하락 거래량이 압도적이면 실제 매도 압력이 강한 것으로 봅니다. (코스피·코스닥만 제공)</dd>
+
+          <dt>만기일 <span class="g-badge witch">만기</span></dt>
+          <dd>파생상품(옵션·선물) 만기로 <b>거래량이 일시적으로 부풀어</b> 분산일로 오판되기 쉬운 날. 한국은 매월 둘째 목요일(3·6·9·12월은 네 마녀의 날), 미국은 분기 셋째 금요일. "만기일 제외" 토글로 카운트에서 뺄 수 있습니다.</dd>
+        </dl>
+      </div>
+    </details>
 
     <footer id="sourceNote">분산일 기준: 전 거래일 대비 종가 0.2% 이상 하락 및 거래량 증가.</footer>
   </main>

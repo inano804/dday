@@ -216,6 +216,79 @@
       display: none;
     }
 
+    .phase-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 620;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .quality-note {
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border: 1px solid #e6cfa6;
+      border-radius: 8px;
+      background: #fdf8ee;
+      color: #8a6d3b;
+      font-size: 13px;
+      font-weight: 620;
+    }
+
+    .quality-note:empty {
+      display: none;
+    }
+
+    .signal-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      font-size: 12.5px;
+      font-weight: 650;
+      color: var(--text);
+    }
+
+    .chip:empty {
+      display: none;
+    }
+
+    .chip b {
+      font-weight: 780;
+    }
+
+    .chip.good b { color: var(--good); }
+    .chip.bad b { color: var(--danger); }
+
+    .badge {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 720;
+      line-height: 1.5;
+    }
+
+    .badge.dist { background: #fbe6e2; color: #a3271c; }
+    .badge.stalling { background: #fbe7d2; color: #955b12; }
+    .badge.witch { background: #e6e9ec; color: #5c6a72; }
+
+    .type-cell { text-align: left; }
+
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -291,6 +364,16 @@
       height: 10px;
       border-radius: 999px;
       display: inline-block;
+    }
+
+    .swatch-tri {
+      border-radius: 0;
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .swatch-diamond {
+      border-radius: 2px;
+      transform: rotate(45deg);
     }
 
     .chart-wrap {
@@ -470,9 +553,12 @@
       </div>
       <div class="phase-side">
         <div class="phase-count" id="phaseCount">-</div>
+        <label class="phase-toggle"><input type="checkbox" id="witchingToggle"> 만기일 제외</label>
         <div class="phase-cluster" id="phaseCluster"></div>
       </div>
     </section>
+
+    <div class="quality-note" id="qualityNote"></div>
 
     <section class="summary-grid" aria-label="요약">
       <div class="metric">
@@ -481,9 +567,9 @@
         <div class="metric-detail" id="recent25Detail">-</div>
       </div>
       <div class="metric">
-        <div class="metric-label">최근 1년 분산일</div>
-        <div class="metric-value" id="oneYearCount">-</div>
-        <div class="metric-detail" id="oneYearDetail">-</div>
+        <div class="metric-label">순압력 (25거래일)</div>
+        <div class="metric-value" id="netPressure">-</div>
+        <div class="metric-detail" id="netPressureDetail">-</div>
       </div>
       <div class="metric">
         <div class="metric-label">최신 종가</div>
@@ -497,6 +583,14 @@
       </div>
     </section>
 
+    <section class="signal-strip" id="signalStrip" aria-label="보조 신호">
+      <span class="chip" id="chipStalling"></span>
+      <span class="chip" id="chipFtd"></span>
+      <span class="chip" id="chipBreadthAd"></span>
+      <span class="chip" id="chipBreadthVol"></span>
+      <span class="chip" id="chipOneYear"></span>
+    </section>
+
     <section class="chart-panel">
       <div class="chart-head">
         <div>
@@ -506,7 +600,10 @@
           <span><i class="swatch" style="background: var(--price)"></i>종가</span>
           <span><i class="swatch" style="background: var(--volume)"></i>거래량</span>
           <span><i class="swatch" style="background: var(--danger)"></i>유효 분산일</span>
-          <span><i class="swatch" style="border: 1.5px solid #9aa7ae; background: transparent"></i>소멸 분산일</span>
+          <span><i class="swatch" style="background: #d98324"></i>유효 정체일</span>
+          <span><i class="swatch swatch-tri" style="background: var(--good)"></i>FTD</span>
+          <span><i class="swatch" style="border: 1.5px solid #9aa7ae; background: transparent"></i>소멸 압박일</span>
+          <span><i class="swatch swatch-diamond" style="border: 1.5px solid #8a97a0; background: transparent"></i>만기일</span>
         </div>
       </div>
       <div class="chart-wrap">
@@ -517,7 +614,7 @@
     <section class="tables" aria-label="분산일 목록">
       <div class="table-panel">
         <div class="table-title">
-          <span>유효 분산일 (25거래일 창)</span>
+          <span>유효 압박일 (분산·정체, 25거래일 창)</span>
           <span class="table-count" id="recent25TableCount">-</span>
         </div>
         <div class="table-scroll">
@@ -525,6 +622,7 @@
             <thead>
               <tr>
                 <th>날짜</th>
+                <th>구분</th>
                 <th>종가</th>
                 <th>등락률</th>
                 <th>거래량 증감률</th>
@@ -538,7 +636,7 @@
 
       <div class="table-panel">
         <div class="table-title">
-          <span>최근 1년</span>
+          <span>최근 1년 분산일</span>
           <span class="table-count" id="oneYearTableCount">-</span>
         </div>
         <div class="table-scroll">
@@ -546,6 +644,7 @@
             <thead>
               <tr>
                 <th>날짜</th>
+                <th>구분</th>
                 <th>종가</th>
                 <th>등락률</th>
                 <th>거래량 증감률</th>
@@ -573,10 +672,17 @@
       phaseAction: document.getElementById("phaseAction"),
       phaseCount: document.getElementById("phaseCount"),
       phaseCluster: document.getElementById("phaseCluster"),
+      witchingToggle: document.getElementById("witchingToggle"),
+      qualityNote: document.getElementById("qualityNote"),
       recent25Count: document.getElementById("recent25Count"),
       recent25Detail: document.getElementById("recent25Detail"),
-      oneYearCount: document.getElementById("oneYearCount"),
-      oneYearDetail: document.getElementById("oneYearDetail"),
+      netPressure: document.getElementById("netPressure"),
+      netPressureDetail: document.getElementById("netPressureDetail"),
+      chipStalling: document.getElementById("chipStalling"),
+      chipFtd: document.getElementById("chipFtd"),
+      chipBreadthAd: document.getElementById("chipBreadthAd"),
+      chipBreadthVol: document.getElementById("chipBreadthVol"),
+      chipOneYear: document.getElementById("chipOneYear"),
       latestClose: document.getElementById("latestClose"),
       latestChange: document.getElementById("latestChange"),
       latestVolume: document.getElementById("latestVolume"),
@@ -602,6 +708,8 @@
     let indexList = [];
     let chart = null;
     let isLoading = false;
+    let lastPayload = null;
+    let excludeWitching = false;
 
     function formatNumber(value) {
       if (value === null || value === undefined || Number.isNaN(value)) return "-";
@@ -719,36 +827,60 @@
       }
     }
 
+    function typeBadge(row) {
+      const parts = [];
+      if (row.stalling) parts.push('<span class="badge stalling">정체</span>');
+      else if (row.distribution) parts.push('<span class="badge dist">분산</span>');
+      if (row.witching) parts.push(`<span class="badge witch">만기</span>`);
+      return parts.join(" ") || "-";
+    }
+
     function render(payload) {
+      lastPayload = payload;
       const summary = payload.summary;
       const latest = payload.latest;
       const index = payload.index;
-
-      const phase = payload.phase || {};
       const cluster = payload.cluster || {};
-      const activeCount = summary.activeDistributionCount ?? summary.recent25DistributionCount;
+
+      // 만기일 제외 토글에 따라 국면·카운트 전환
+      const useEx = excludeWitching;
+      const phase = (useEx ? payload.phaseExWitching : payload.phase) || {};
+      const activeCount = useEx
+        ? (summary.activeDistributionExWitchingCount ?? summary.activeDistributionCount)
+        : summary.activeDistributionCount;
 
       elements.asOf.textContent = `${index.name} 기준일 ${payload.asOf}`;
       elements.phaseBanner.className = `phase-banner ${phase.level || ""}`;
       elements.phaseLabel.textContent = phase.label || "-";
       elements.phaseAction.textContent = phase.action || "";
-      elements.phaseCount.textContent = `유효 분산일 ${activeCount}일`;
+      elements.phaseCount.textContent = `유효 압박일 ${activeCount}일${useEx ? " (만기 제외)" : ""}`;
       elements.phaseCluster.textContent = cluster.warning
         ? `⚠ 최근 ${cluster.windowDays}거래일에 ${cluster.count}일 집중 — 조정 임박 신호`
         : "";
 
+      elements.qualityNote.textContent = index.lowQuality
+        ? "⚠ 코스닥은 개인 비중이 높아 거래량 변동성이 커 신호 품질이 낮습니다. 참고 지표로만 활용하세요."
+        : "";
+
       elements.recent25Count.textContent = `${activeCount}일`;
       elements.recent25Detail.textContent = `창 내 발생 ${summary.recent25DistributionCount}일 중 (5% 회복·기간경과 제외)`;
-      elements.oneYearCount.textContent = `${summary.oneYearDistributionCount}일`;
-      elements.oneYearDetail.textContent = `${summary.oneYearTradingDays}거래일 중 (참고용)`;
+
+      const net = summary.netPressure;
+      elements.netPressure.textContent = net > 0 ? `+${net}` : `${net}`;
+      elements.netPressure.className = `metric-value ${net > 0 ? "negative" : net < 0 ? "positive" : ""}`;
+      elements.netPressureDetail.textContent = `압박 ${summary.activeDistributionCount} − 매집 ${summary.accumulationRecentCount} (음수일수록 강세)`;
+
       elements.latestClose.textContent = formatNumber(latest.close);
       elements.latestChange.textContent = formatPct(latest.closeChangePct);
       elements.latestChange.className = `metric-detail ${pctClass(latest.closeChangePct)}`;
       elements.latestVolume.textContent = formatVolume(latest.volume);
       elements.latestVolumeChange.textContent = formatPct(latest.volumeChangePct);
       elements.latestVolumeChange.className = `metric-detail ${pctClass(latest.volumeChangePct)}`;
+
+      renderSignalStrip(payload);
+
       elements.chartTitle.textContent = `${index.name} 최근 1년 지수와 거래량`;
-      elements.sourceNote.textContent = `출처: ${payload.source}. 분산일 = 전 거래일 대비 종가 0.2%↓ + 거래량 증가. 유효 분산일 = 25거래일 창 내 미소멸(지수가 해당일 종가 대비 5%↑ 상승 시 소멸). 분산일은 후행 지표로, 확인 신호이지 예측 신호가 아닙니다.`;
+      elements.sourceNote.textContent = `출처: ${payload.source}. 분산일 = 전 거래일 대비 종가 0.2%↓ + 거래량 증가. 정체일(거래량↑·상승폭 미미·종가 저가권)도 압박일로 합산. 유효 압박일 = 25거래일 창 내 미소멸(종가 대비 5%↑ 상승 시 소멸). FTD = 조정 후 재진입 신호. 후행 지표로, 확인 신호이지 예측 신호가 아닙니다.`;
 
       renderChart(payload);
       renderRows(elements.recent25Rows, elements.recent25Empty, payload.activeDistributionDays);
@@ -757,15 +889,45 @@
       elements.oneYearTableCount.textContent = `${payload.oneYearDistributionDays.length}일`;
     }
 
+    function renderSignalStrip(payload) {
+      const summary = payload.summary;
+      const ftd = payload.followThrough || {};
+      const latestBreadth = [...payload.series].reverse().find((row) => row.breadth);
+
+      elements.chipStalling.innerHTML = summary.stallingCount > 0
+        ? `정체일 <b>${summary.stallingCount}</b>일 (유효 압박에 포함)` : "";
+      elements.chipFtd.innerHTML = ftd.latest
+        ? `<span class="good"><b>▲ 최근 FTD</b> ${ftd.latest}</span> 재진입 신호` : "";
+
+      if (latestBreadth && latestBreadth.breadth) {
+        const b = latestBreadth.breadth;
+        const adCls = b.adRatio != null && b.adRatio < 1 ? "bad" : "good";
+        const volCls = b.upDownVolRatio != null && b.upDownVolRatio < 1 ? "bad" : "good";
+        elements.chipBreadthAd.className = `chip ${adCls}`;
+        elements.chipBreadthAd.innerHTML = `시장 폭 등락 <b>${b.advancers}↑ / ${b.decliners}↓</b>${b.adRatio != null ? ` (A/D ${b.adRatio})` : ""}`;
+        elements.chipBreadthVol.className = `chip ${volCls}`;
+        elements.chipBreadthVol.innerHTML = b.upDownVolRatio != null
+          ? `상승/하락 거래량 <b>${b.upDownVolRatio}</b>` : "";
+      } else {
+        elements.chipBreadthAd.className = "chip";
+        elements.chipBreadthAd.innerHTML = "";
+        elements.chipBreadthVol.className = "chip";
+        elements.chipBreadthVol.innerHTML = "";
+      }
+
+      elements.chipOneYear.innerHTML = `최근 1년 분산일 <b>${summary.oneYearDistributionCount}</b>일 (참고)`;
+    }
+
     function renderRows(tbody, emptyElement, rows) {
       tbody.innerHTML = "";
       emptyElement.style.display = rows.length ? "none" : "block";
-      emptyElement.textContent = "분산일 없음";
+      emptyElement.textContent = "해당 신호 없음";
 
       for (const row of rows) {
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${row.date}</td>
+          <td class="type-cell">${typeBadge(row)}</td>
           <td>${formatNumber(row.close)}</td>
           <td class="${pctClass(row.closeChangePct)}">${formatPct(row.closeChangePct)}</td>
           <td class="${pctClass(row.volumeChangePct)}">${formatPct(row.volumeChangePct)}</td>
@@ -775,11 +937,15 @@
     }
 
     function renderChart(payload) {
-      const labels = payload.series.map((row) => row.date);
-      const closeData = payload.series.map((row) => row.close);
-      const volumeData = payload.series.map((row) => row.volume);
-      const activeData = payload.series.map((row) => row.active ? row.close : null);
-      const expiredData = payload.series.map((row) => (row.distribution && !row.active) ? row.close : null);
+      const s = payload.series;
+      const labels = s.map((row) => row.date);
+      const volumeData = s.map((row) => row.volume);
+      const closeData = s.map((row) => row.close);
+      const activeDistData = s.map((row) => (row.active && row.distribution) ? row.close : null);
+      const activeStallData = s.map((row) => (row.active && row.stalling) ? row.close : null);
+      const expiredData = s.map((row) => (row.pressure && !row.active) ? row.close : null);
+      const ftdData = s.map((row) => row.followThrough ? row.close : null);
+      const witchData = s.map((row) => (row.witching && row.pressure) ? row.close : null);
 
       const context = document.getElementById("marketChart").getContext("2d");
       if (chart) chart.destroy();
@@ -798,7 +964,7 @@
               borderWidth: 1,
               barPercentage: 0.9,
               categoryPercentage: 0.9,
-              order: 3,
+              order: 5,
             },
             {
               type: "line",
@@ -810,11 +976,11 @@
               borderWidth: 2,
               pointRadius: 0,
               tension: 0.18,
-              order: 1,
+              order: 4,
             },
             {
               type: "line",
-              label: "소멸 분산일",
+              label: "소멸 압박일",
               data: expiredData,
               yAxisID: "price",
               showLine: false,
@@ -823,12 +989,26 @@
               pointBackgroundColor: "rgba(255,255,255,0)",
               pointBorderColor: "#9aa7ae",
               pointBorderWidth: 1.5,
-              order: 0,
+              order: 3,
+            },
+            {
+              type: "line",
+              label: "만기일",
+              data: witchData,
+              yAxisID: "price",
+              showLine: false,
+              pointStyle: "rectRot",
+              pointRadius: 7,
+              pointHoverRadius: 9,
+              pointBackgroundColor: "rgba(255,255,255,0)",
+              pointBorderColor: "#8a97a0",
+              pointBorderWidth: 1.5,
+              order: 2,
             },
             {
               type: "line",
               label: "유효 분산일",
-              data: activeData,
+              data: activeDistData,
               yAxisID: "price",
               showLine: false,
               pointRadius: 4.5,
@@ -837,6 +1017,33 @@
               pointBorderColor: "#ffffff",
               pointBorderWidth: 1.5,
               order: 0,
+            },
+            {
+              type: "line",
+              label: "유효 정체일",
+              data: activeStallData,
+              yAxisID: "price",
+              showLine: false,
+              pointRadius: 4.5,
+              pointHoverRadius: 7,
+              pointBackgroundColor: "#d98324",
+              pointBorderColor: "#ffffff",
+              pointBorderWidth: 1.5,
+              order: 0,
+            },
+            {
+              type: "line",
+              label: "Follow-Through Day",
+              data: ftdData,
+              yAxisID: "price",
+              showLine: false,
+              pointStyle: "triangle",
+              pointRadius: 6.5,
+              pointHoverRadius: 9,
+              pointBackgroundColor: "#24795a",
+              pointBorderColor: "#ffffff",
+              pointBorderWidth: 1.5,
+              order: 1,
             },
           ],
         },
@@ -860,8 +1067,18 @@
                     `등락률: ${formatPct(row.closeChangePct)}`,
                     `거래량 증감: ${formatPct(row.volumeChangePct)}`,
                   ];
-                  if (row.distribution) {
+                  if (row.stalling) {
+                    lines.push(row.active ? "유효 정체일" : `소멸 정체일 (${row.expiredReason || "소멸"})`);
+                  } else if (row.distribution) {
                     lines.push(row.active ? "유효 분산일" : `소멸 분산일 (${row.expiredReason || "소멸"})`);
+                  } else if (row.accumulation) {
+                    lines.push("매집일 (거래량↑ 상승)");
+                  }
+                  if (row.followThrough) lines.push("▲ Follow-Through Day (재진입 신호)");
+                  if (row.witching) lines.push(`만기일: ${row.witchingType}`);
+                  if (row.breadth) {
+                    lines.push(`시장 폭: ${row.breadth.advancers}↑ / ${row.breadth.decliners}↓`
+                      + (row.breadth.upDownVolRatio != null ? ` · 상승/하락 거래량 ${row.breadth.upDownVolRatio}` : ""));
                   }
                   return lines;
                 },
@@ -899,6 +1116,10 @@
     async function boot() {
       try {
         elements.refreshButton.addEventListener("click", refreshData);
+        elements.witchingToggle.addEventListener("change", () => {
+          excludeWitching = elements.witchingToggle.checked;
+          if (lastPayload) render(lastPayload);
+        });
         await loadIndexes();
         await loadData(activeIndex);
       } catch (error) {

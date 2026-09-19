@@ -1,4 +1,4 @@
-.env
+.env*
 .git
 .DS_Store
 __pycache__/
@@ -8,3 +8,5 @@ docs/
 바꿀꺼.txt
 app.py
 README.md
+tests/
+scripts/

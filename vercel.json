@@ -16,6 +16,22 @@
     }
   ],
   "routes": [
+    {
+      "src": "/(.*)",
+      "headers": {
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()"
+      },
+      "continue": true
+    },
+    {
+      "src": "/vendor/(chart-4\\.4\\.3\\.min\\.js|hammer-2\\.0\\.8\\.min\\.js|chartjs-plugin-zoom-2\\.2\\.0\\.min\\.js)",
+      "headers": { "Cache-Control": "public, max-age=31536000, immutable" },
+      "continue": true
+    },
     { "src": "/api/data", "dest": "/api/data.py" },
     { "src": "/api/indexes", "dest": "/api/indexes.py" },
     { "src": "/", "dest": "/public/index.html" },

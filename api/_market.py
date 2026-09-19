@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 from urllib.request import Request, urlopen
 
 try:
@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - Python 3.9+ on the target machine has 
 
 
 CACHE_TTL_SECONDS = 600
+YAHOO_TIMEOUT_SECONDS = 4
 YAHOO_CHART_URLS = (
     "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
     "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
@@ -171,6 +172,7 @@ KRX_STOCK_ENDPOINT: Dict[str, str] = {
 }
 
 _CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKET_LOCKS = {index_id: threading.Lock() for index_id in INDEXES}
 _KRX_CACHE_LOCK = threading.Lock()
 _KRX_BUILD_LOCKS: Dict[str, threading.Lock] = {}
 _KRX_DISK_CACHE: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -214,32 +216,34 @@ def request_yahoo_chart(symbol: str) -> Dict[str, Any]:
             + "?range=13mo&interval=1d&events=history&includePrePost=false"
         )
         try:
-            return fetch_json_url(url)
+            return fetch_json_url(url, timeout=YAHOO_TIMEOUT_SECONDS)
         except RuntimeError as exc:
             last_error = str(exc)
-            if "429" in last_error:
-                time.sleep(0.8)
             continue
 
     raise RuntimeError(f"Yahoo Finance 응답 실패: {last_error}")
 
 
-def fetch_json_url(url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def fetch_json_url(
+    url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 25
+) -> Dict[str, Any]:
     curl_path = shutil.which("curl")
     if curl_path:
-        return fetch_json_with_curl(curl_path, url, headers)
-    return fetch_json_with_urllib(url, headers)
+        return fetch_json_with_curl(curl_path, url, headers, timeout)
+    return fetch_json_with_urllib(url, headers, timeout)
 
 
 def fetch_json_with_curl(
-    curl_path: str, url: str, headers: Optional[Dict[str, str]] = None
+    curl_path: str, url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 25
 ) -> Dict[str, Any]:
     command = [
         curl_path,
         "-fsSL",
         "--compressed",
         "--max-time",
-        "25",
+        str(timeout),
+        "--connect-timeout",
+        str(min(timeout, 3)),
         "-A",
         USER_AGENT,
         "-H",
@@ -249,12 +253,16 @@ def fetch_json_with_curl(
         command += ["-H", f"{name}: {value}"]
     command.append(url)
 
-    result = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 1,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("데이터 조회 시간이 초과되었습니다.") from exc
     if result.returncode != 0:
         message = result.stderr.strip() or f"curl 종료 코드 {result.returncode}"
         raise RuntimeError(message)
@@ -265,7 +273,9 @@ def fetch_json_with_curl(
         raise RuntimeError("JSON 해석 실패") from exc
 
 
-def fetch_json_with_urllib(url: str, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def fetch_json_with_urllib(
+    url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 25
+) -> Dict[str, Any]:
     request = Request(
         url,
         headers={
@@ -277,12 +287,14 @@ def fetch_json_with_urllib(url: str, headers: Optional[Dict[str, str]] = None) -
     )
 
     try:
-        with urlopen(request, timeout=25) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except URLError as exc:
         raise RuntimeError(f"연결 오류: {exc.reason}") from exc
+    except (TimeoutError, OSError) as exc:
+        raise RuntimeError("데이터 연결 실패 또는 시간 초과") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError("JSON 해석 실패") from exc
 
@@ -849,29 +861,71 @@ def market_phase(active_count: int) -> Dict[str, Any]:
 
 
 def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]:
+    started = time.monotonic()
     cached = _CACHE.get(index_id)
-    now = time.time()
-    if not force_refresh and cached and now - cached["created_at"] < CACHE_TTL_SECONDS:
+    if not force_refresh and cached and time.time() - cached["created_at"] < CACHE_TTL_SECONDS:
         return cached["payload"]
 
+    lock = _MARKET_LOCKS[index_id]
+    if not lock.acquire(timeout=YAHOO_TIMEOUT_SECONDS * len(YAHOO_CHART_URLS) + 3):
+        raise RuntimeError("다른 데이터 조회가 진행 중입니다.")
+    try:
+        cached = _CACHE.get(index_id)
+        if cached:
+            fresh = time.time() - cached["created_at"] < CACHE_TTL_SECONDS
+            fetched_during_request = (
+                cached.get("source_refetched", False)
+                and cached.get("completed_at", 0) >= started
+            )
+            if (not force_refresh and fresh) or fetched_during_request:
+                return cached["payload"]
+        return build_market_payload(index_id, force_refresh)
+    finally:
+        lock.release()
+
+
+def build_market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]:
+    cached = _CACHE.get(index_id)
     index_config = INDEXES[index_id]
     rows: Optional[List[Dict[str, Any]]] = None
     source = "Yahoo Finance chart API"
+    stale = False
+    source_refetched = False
+    warning = None
+    snapshot_rows: List[Dict[str, Any]] = []
 
-    if index_id in KRX_INDEX_CONFIG and krx_auth_key():
-        try:
-            krx_rows = build_krx_rows(index_id)
-            if len(krx_rows) < 2:
-                raise RuntimeError("KRX 데이터가 충분하지 않습니다.")
-            rows = enrich_rows(krx_rows)
+    # KRX backfill and retry sleeps belong to the offline snapshot updater.
+    if index_id in KRX_INDEX_CONFIG:
+        with _KRX_CACHE_LOCK:
+            snapshot_rows = sorted(
+                load_krx_cache(index_id)["rows"].values(), key=lambda row: row["date"]
+            )
+        latest_weekday = seoul_today()
+        while latest_weekday.weekday() >= 5:
+            latest_weekday -= timedelta(days=1)
+        if (not force_refresh and len(snapshot_rows) >= 2
+                and snapshot_rows[-1]["date"] >= latest_weekday.isoformat()):
+            rows = enrich_rows(snapshot_rows)
             source = KRX_INDEX_CONFIG[index_id]["source"]
-        except RuntimeError as exc:
-            sys.stderr.write(f"KRX 수집 실패, Yahoo Finance로 대체합니다: {exc}\n")
-            source = "Yahoo Finance chart API (KRX 오류로 대체)"
 
     if rows is None:
-        raw = request_yahoo_chart(index_config["symbol"])
-        rows = enrich_rows(parse_chart_rows(index_config, raw))
+        try:
+            raw = request_yahoo_chart(index_config["symbol"])
+            rows = enrich_rows(parse_chart_rows(index_config, raw))
+            if len(rows) < 2:
+                raise RuntimeError("조회한 데이터가 충분하지 않습니다.")
+            source_refetched = True
+        except RuntimeError as exc:
+            sys.stderr.write(f"최신 데이터 조회 실패({index_id}): {exc}\n")
+            warning = "최신 데이터를 가져오지 못해 저장된 데이터를 표시합니다. 기준일을 확인해 주세요."
+            if cached and (len(snapshot_rows) < 2 or
+                           cached["payload"]["asOf"] >= snapshot_rows[-1]["date"]):
+                return {**cached["payload"], "stale": True, "warning": warning}
+            if len(snapshot_rows) < 2:
+                raise
+            rows = enrich_rows(snapshot_rows)
+            source = KRX_INDEX_CONFIG[index_id]["source"] + " (저장본)"
+            stale = True
     if len(rows) < 2:
         raise RuntimeError("분산일을 계산할 만큼 데이터가 충분하지 않습니다.")
 
@@ -922,6 +976,8 @@ def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]
             "lowQuality": index_id in LOW_QUALITY_INDEXES,
         },
         "source": source,
+        "stale": stale,
+        "warning": warning,
         "asOf": latest["date"],
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "summary": {
@@ -953,21 +1009,23 @@ def market_payload(index_id: str, force_refresh: bool = False) -> Dict[str, Any]
         "activeDistributionDays": active_pressure,
         "oneYearDistributionDays": one_year_distribution,
     }
-    _CACHE[index_id] = {"created_at": now, "payload": payload}
+    if not stale:
+        _CACHE[index_id] = {
+            "created_at": time.time(), "completed_at": time.monotonic(),
+            "source_refetched": source_refetched, "payload": payload,
+        }
     return payload
 
 
 def attach_breadth(index_id: str, one_year_rows: List[Dict[str, Any]]) -> None:
-    """최근 거래일들의 시장 폭 요약을 해당 행에 붙인다(KOSPI·KOSDAQ 한정, 실패해도 무시)."""
-    if index_id not in KRX_STOCK_ENDPOINT or not krx_auth_key():
+    """저장된 시장 폭만 붙인다. 누락된 날짜 수집은 별도 갱신 작업에서 실행한다."""
+    if index_id not in KRX_STOCK_ENDPOINT:
         return
     recent = one_year_rows[-BREADTH_WINDOW_DAYS:]
     iso_dates = [row["date"] for row in recent]
-    try:
-        summaries = build_breadth_summaries(index_id, iso_dates)
-    except RuntimeError as exc:
-        sys.stderr.write(f"시장 폭 수집 실패(무시): {exc}\n")
-        return
+    with _KRX_CACHE_LOCK:
+        cache = load_breadth_cache(index_id)
+        summaries = {iso: cache["rows"][iso] for iso in iso_dates if iso in cache["rows"]}
     for row in recent:
         summary = summaries.get(row["date"])
         if not summary:
@@ -985,11 +1043,38 @@ def attach_breadth(index_id: str, one_year_rows: List[Dict[str, Any]]) -> None:
         }
 
 
+def data_cache_headers(status: int, payload: Dict[str, Any], force_refresh: bool) -> Dict[str, str]:
+    cacheable = status == 200 and not force_refresh and not payload.get("stale")
+    return {
+        "Cache-Control": "no-store",
+        "Vercel-CDN-Cache-Control": (
+            "public, s-maxage=300, stale-while-revalidate=600" if cacheable else "no-store"
+        ),
+    }
+
+
+def parse_data_query(query_string: str) -> Tuple[str, bool]:
+    if len(query_string) > 2048:
+        raise ValueError("Query too long")
+    query = parse_qs(query_string, keep_blank_values=True, max_num_fields=8)
+    if set(query) - {"index", "refresh", "_"} or any(len(values) != 1 for values in query.values()):
+        raise ValueError("Unsupported or duplicate parameter")
+    index_id = query.get("index", ["kospi"])[0]
+    refresh = query.get("refresh", ["0"])[0].lower()
+    if not index_id or len(index_id) > 16 or refresh not in {"0", "1", "false", "true", "no", "yes", "n", "y"}:
+        raise ValueError("Invalid parameter")
+    timestamp = query.get("_", ["0"])[0]
+    if not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 20:
+        raise ValueError("Invalid timestamp")
+    return index_id, refresh in {"1", "true", "yes", "y"}
+
+
 def data_response(index_id: str, force_refresh: bool) -> Tuple[int, Dict[str, Any]]:
     """(HTTP 상태코드, JSON 본문) 튜플을 돌려준다."""
     if index_id not in INDEXES:
         return 404, {"error": "지원하지 않는 지수입니다."}
     try:
         return 200, market_payload(index_id, force_refresh=force_refresh)
-    except RuntimeError as exc:
-        return 502, {"error": str(exc)}
+    except (RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+        sys.stderr.write(f"데이터 응답 실패({index_id}): {type(exc).__name__}\n")
+        return 502, {"error": "데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."}
